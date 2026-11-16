@@ -1,110 +1,97 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+// main.ts — deterministic image entry for make.fun ai-excited-01.
+//
+// Copies the bundled entry image to the harness output directory, byte
+// for byte, after checking it is a real PNG or JPEG inside the
+// competition's size and dimension caps. Standard library only, no
+// network, no randomness, no timestamps: two runs write identical bytes.
+
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MAX_BYTES = 1048576;
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const JPEG_START = Buffer.from([0xff, 0xd8, 0xff]);
+const LIMIT_BYTES = 1024 * 1024;
+const LIMIT_PX = 1024;
 
-function sha256(buffer: Buffer): string {
-  return createHash("sha256").update(buffer).digest("hex");
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPG_MAGIC = [0xff, 0xd8, 0xff];
+
+function die(msg: string): never {
+  console.error(`main.ts: ${msg}`);
+  process.exit(1);
 }
 
-function parseDimensions(buffer: Buffer, isPng: boolean): [number, number] | null {
-  if (isPng) {
-    // PNG: width at bytes 16-19, height at bytes 20-23 (big-endian uint32, IHDR).
-    if (buffer.length < 24) return null;
-    return [buffer.readUInt32BE(16), buffer.readUInt32BE(20)];
-  }
-  // JPEG: walk segments until a Start Of Frame marker (0xC0-0xCF except
-  // 0xC4, 0xC8, 0xCC); its payload holds height then width (big-endian uint16).
-  const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
-  let offset = 2; // skip SOI (FF D8)
-  while (offset + 3 < buffer.length) {
-    if (buffer[offset] !== 0xff) return null;
-    const marker = buffer[offset + 1];
+function kindOf(buf: Buffer): "png" | "jpg" | null {
+  if (PNG_MAGIC.every((b, i) => buf[i] === b)) return "png";
+  if (JPG_MAGIC.every((b, i) => buf[i] === b)) return "jpg";
+  return null;
+}
+
+function pngSize(buf: Buffer): [number, number] | null {
+  // IHDR stores width then height as big-endian uint32 at bytes 16..23.
+  if (buf.length < 24) return null;
+  return [buf.readUInt32BE(16), buf.readUInt32BE(20)];
+}
+
+function jpgSize(buf: Buffer): [number, number] | null {
+  // Walk JPEG markers until the first Start-Of-Frame segment; it holds
+  // height then width as big-endian uint16.
+  const sof = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+  let i = 2; // skip SOI (FF D8)
+  while (i + 3 < buf.length) {
+    if (buf[i] !== 0xff) return null;
+    const marker = buf[i + 1];
     if (marker === 0xff) {
-      offset += 1; // padding byte, keep scanning
+      i += 1; // padding byte
       continue;
     }
     if (marker === 0xd9) return null; // EOI before any SOF
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
-      offset += 2; // standalone marker, no length field
+      i += 2; // standalone marker, no length field
       continue;
     }
-    const length = buffer.readUInt16BE(offset + 2);
-    if (length < 2 || offset + 2 + length > buffer.length) return null;
-    if (sofMarkers.has(marker)) {
-      if (length < 7) return null;
-      const height = buffer.readUInt16BE(offset + 5);
-      const width = buffer.readUInt16BE(offset + 7);
-      return [width, height];
+    const len = buf.readUInt16BE(i + 2);
+    if (len < 2 || i + 2 + len > buf.length) return null;
+    if (sof.has(marker)) {
+      if (len < 7) return null;
+      return [buf.readUInt16BE(i + 7), buf.readUInt16BE(i + 5)];
     }
-    offset += 2 + length;
+    i += 2 + len;
   }
   return null;
 }
 
-function fail(message: string): never {
-  console.error(`error: ${message}`);
-  process.exit(1);
-}
-
 function main(): void {
-  const dir = dirname(fileURLToPath(import.meta.url));
-  const sourcePath = join(dir, "entry.png");
-  const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-  const destPath = join(outputDir, "entry.png");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = join(here, "entry.png");
+  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+  const dst = join(outDir, "entry.png");
 
-  if (!existsSync(sourcePath)) {
-    fail(`source image not found: ${sourcePath}`);
-  }
-
-  const sourceStat = statSync(sourcePath);
-  if (sourceStat.size > MAX_BYTES) {
-    fail(`source image too large: ${sourceStat.size} bytes exceeds ${MAX_BYTES} bytes`);
-  }
-
-  const sourceBytes = readFileSync(sourcePath);
-  if (sourceBytes.length !== sourceStat.size) {
-    fail(`could not read full source image: ${sourcePath}`);
-  }
-
-  mkdirSync(outputDir, { recursive: true });
-
+  let bytes: Buffer;
   try {
-    copyFileSync(sourcePath, destPath);
-  } catch (err) {
-    fail(`failed to copy ${sourcePath} to ${destPath}: ${(err as Error).message}`);
+    bytes = readFileSync(src);
+  } catch {
+    die(`cannot read ${src}`);
+  }
+  if (bytes.length > LIMIT_BYTES) {
+    die(`entry image is ${bytes.length} bytes, over the ${LIMIT_BYTES} byte cap`);
   }
 
-  const destBytes = readFileSync(destPath);
-  if (destBytes.length !== sourceBytes.length) {
-    fail(`size mismatch after copy: source ${sourceBytes.length} bytes, destination ${destBytes.length} bytes`);
-  }
-  const sourceHash = sha256(sourceBytes);
-  const destHash = sha256(destBytes);
-  if (destHash !== sourceHash) {
-    fail(`sha256 mismatch after copy: source ${sourceHash}, destination ${destHash}`);
-  }
-
-  const isPng = destBytes.length >= PNG_SIGNATURE.length && destBytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
-  const isJpeg = destBytes.length >= JPEG_START.length && destBytes.subarray(0, JPEG_START.length).equals(JPEG_START);
-  if (!isPng && !isJpeg) {
-    fail(`destination is neither PNG nor JPEG (bad magic bytes): ${destPath}`);
+  const kind = kindOf(bytes);
+  if (kind === null) die("entry image is neither PNG nor JPEG");
+  const size = kind === "png" ? pngSize(bytes) : jpgSize(bytes);
+  if (size === null) die("could not read image dimensions");
+  const [w, h] = size;
+  if (w > LIMIT_PX || h > LIMIT_PX) {
+    die(`image is ${w}x${h}, over the ${LIMIT_PX}x${LIMIT_PX} cap`);
   }
 
-  const dimensions = parseDimensions(destBytes, isPng);
-  if (dimensions === null) {
-    fail(`could not parse image dimensions: ${destPath}`);
-  }
-  const [width, height] = dimensions;
-  if (width > 1024 || height > 1024) {
-    fail(`image dimensions too large: ${width}x${height} exceeds 1024x1024`);
-  }
-
-  console.log(`wrote ${destPath} (${destBytes.length} bytes, sha256 ${destHash})`);
+  mkdirSync(outDir, { recursive: true });
+  copyFileSync(src, dst);
+  const written = readFileSync(dst);
+  if (!written.equals(bytes)) die("output bytes differ from source bytes");
+  const sum = createHash("sha256").update(written).digest("hex");
+  console.log(`wrote ${dst} (${written.length} bytes, ${kind}, ${w}x${h}, sha256 ${sum})`);
 }
 
 main();
