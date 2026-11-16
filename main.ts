@@ -1,13 +1,14 @@
-// ai-excited-01 entry (Node 22, standard library only).
+// ai-excited-01 entry — Node 22, standard library only.
 //
-// The program writes the entry image — a phoenix of aurora light
-// shattering a frozen lake at night, wings of teal and violet northern
-// lights, body of white-gold flame — to /output/entry.png. The image
-// lives beside this file as entry.png (JPEG bytes under that name; the
-// gate tells the format apart by its first bytes). Before copying, the
-// program checks the file is a whole JPEG inside the gate limits (at
-// most 1 MiB, at most 1024x1024) so a bad file fails loudly here instead
-// of silently reaching the judge.
+// Writes the entry image to /output/entry.png: a phoenix of aurora
+// light shattering a frozen lake at night, wings of teal and violet
+// northern lights spread wide, a body of white-gold flame, ice
+// crystals bursting upward like diamonds under a starry sky. The image
+// ships beside this file as entry.png (JPEG bytes; the gate tells the
+// format apart by its first bytes). Before copying, the program proves
+// the file is a whole JPEG inside the gate limits (at most 1 MiB, at
+// most 1024x1024), so a corrupt file fails loudly here instead of
+// silently reaching the judge.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for
 // /output:
@@ -37,11 +38,17 @@ if (data.length > MAX_BYTES) {
   throw new Error(`entry.png is ${data.length} bytes, over the 1 MiB limit`);
 }
 
-// Scan the JPEG markers for the frame header (SOF0/SOF2) and read the
-// pixel dimensions out of it. Throws on a truncated segment instead of
-// silently reporting no header. Fill bytes (runs of 0xFF) and stuffed
+// Markers with no length field: SOI, TEM, and the restart markers.
+// They carry no segment to skip, so the walk just steps past them.
+function isStandaloneMarker(marker) {
+  return marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7);
+}
+
+// Walk the JPEG marker stream to the frame header (SOF0/SOF2) and read
+// the pixel dimensions from it. A truncated segment throws instead of
+// silently reporting no header. Runs of 0xFF fill bytes and stuffed
 // 0xFF 0x00 pairs are skipped the way a JPEG reader skips them, so a
-// stray 0xFF before the frame header cannot be mistaken for a marker.
+// stray 0xFF before the frame header is never mistaken for a marker.
 function jpegDimensions(bytes) {
   let i = 2;
   while (i + 9 < bytes.length) {
@@ -63,7 +70,7 @@ function jpegDimensions(bytes) {
         width: (bytes[i + 7] << 8) | bytes[i + 8],
       };
     }
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+    if (isStandaloneMarker(marker)) {
       i += 2;
       continue;
     }
