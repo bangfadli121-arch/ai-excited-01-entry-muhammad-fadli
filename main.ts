@@ -1,97 +1,74 @@
-// main.ts — deterministic image entry for make.fun ai-excited-01.
+// ai-excited-01 entry (Node 22, standard library only).
 //
-// Copies the bundled entry image to the harness output directory, byte
-// for byte, after checking it is a real PNG or JPEG inside the
-// competition's size and dimension caps. Standard library only, no
-// network, no randomness, no timestamps: two runs write identical bytes.
+// The program writes the entry image — a phoenix of molten gold bursting
+// out of a volcano — to /output/entry.png. The image lives beside this file
+// as entry.png (JPEG bytes under that name, which the gate tells apart by
+// its first bytes). Before copying, the program checks the file is a whole
+// JPEG inside the gate limits (at most 1 MiB, at most 1024x1024) so a bad
+// file fails loudly here instead of silently reaching the judge.
+//
+// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
-const LIMIT_BYTES = 1024 * 1024;
-const LIMIT_PX = 1024;
+const MAX_BYTES = 1_048_576;
+const MAX_SIDE = 1024;
 
-const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const JPG_MAGIC = [0xff, 0xd8, 0xff];
+const source = new URL('./entry.png', import.meta.url);
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const target = join(outDir, 'entry.png');
 
-function die(msg: string): never {
-  console.error(`main.ts: ${msg}`);
-  process.exit(1);
+const data = readFileSync(source);
+
+// A JPEG starts with FF D8 FF and ends with FF D9; anything else is not
+// the image this entry ships.
+if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff) {
+  throw new Error('entry.png is not a JPEG (bad magic bytes)');
+}
+if (data[data.length - 2] !== 0xff || data[data.length - 1] !== 0xd9) {
+  throw new Error('entry.png is not a whole JPEG (missing end marker)');
+}
+if (data.length > MAX_BYTES) {
+  throw new Error(`entry.png is ${data.length} bytes, over the 1 MiB limit`);
 }
 
-function kindOf(buf: Buffer): "png" | "jpg" | null {
-  if (PNG_MAGIC.every((b, i) => buf[i] === b)) return "png";
-  if (JPG_MAGIC.every((b, i) => buf[i] === b)) return "jpg";
-  return null;
-}
-
-function pngSize(buf: Buffer): [number, number] | null {
-  // IHDR stores width then height as big-endian uint32 at bytes 16..23.
-  if (buf.length < 24) return null;
-  return [buf.readUInt32BE(16), buf.readUInt32BE(20)];
-}
-
-function jpgSize(buf: Buffer): [number, number] | null {
-  // Walk JPEG markers until the first Start-Of-Frame segment; it holds
-  // height then width as big-endian uint16.
-  const sof = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
-  let i = 2; // skip SOI (FF D8)
-  while (i + 3 < buf.length) {
-    if (buf[i] !== 0xff) return null;
-    const marker = buf[i + 1];
-    if (marker === 0xff) {
-      i += 1; // padding byte
+// Read the frame header (SOF0/SOF2) to confirm the pixel dimensions.
+// Throws on a truncated segment instead of silently reporting no header.
+function jpegDimensions(data) {
+  for (let i = 2; i + 9 < data.length; ) {
+    if (data[i] !== 0xff) { i += 1; continue; }
+    const marker = data[i + 1];
+    if (marker === 0xc0 || marker === 0xc2) {
+      return {
+        height: (data[i + 5] << 8) | data[i + 6],
+        width: (data[i + 7] << 8) | data[i + 8],
+      };
+    }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2;
       continue;
     }
-    if (marker === 0xd9) return null; // EOI before any SOF
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
-      i += 2; // standalone marker, no length field
-      continue;
+    const segLen = (data[i + 2] << 8) | data[i + 3];
+    if (segLen < 2 || i + 2 + segLen > data.length) {
+      throw new Error('entry.png has a truncated JPEG segment');
     }
-    const len = buf.readUInt16BE(i + 2);
-    if (len < 2 || i + 2 + len > buf.length) return null;
-    if (sof.has(marker)) {
-      if (len < 7) return null;
-      return [buf.readUInt16BE(i + 7), buf.readUInt16BE(i + 5)];
-    }
-    i += 2 + len;
+    i += 2 + segLen;
   }
-  return null;
+  throw new Error('entry.png has no JPEG frame header');
 }
 
-function main(): void {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const src = join(here, "entry.png");
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-  const dst = join(outDir, "entry.png");
-
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(src);
-  } catch {
-    die(`cannot read ${src}`);
-  }
-  if (bytes.length > LIMIT_BYTES) {
-    die(`entry image is ${bytes.length} bytes, over the ${LIMIT_BYTES} byte cap`);
-  }
-
-  const kind = kindOf(bytes);
-  if (kind === null) die("entry image is neither PNG nor JPEG");
-  const size = kind === "png" ? pngSize(bytes) : jpgSize(bytes);
-  if (size === null) die("could not read image dimensions");
-  const [w, h] = size;
-  if (w > LIMIT_PX || h > LIMIT_PX) {
-    die(`image is ${w}x${h}, over the ${LIMIT_PX}x${LIMIT_PX} cap`);
-  }
-
-  mkdirSync(outDir, { recursive: true });
-  copyFileSync(src, dst);
-  const written = readFileSync(dst);
-  if (!written.equals(bytes)) die("output bytes differ from source bytes");
-  const sum = createHash("sha256").update(written).digest("hex");
-  console.log(`wrote ${dst} (${written.length} bytes, ${kind}, ${w}x${h}, sha256 ${sum})`);
+const { width, height } = jpegDimensions(data);
+if (width > MAX_SIDE || height > MAX_SIDE) {
+  throw new Error(`entry.png is ${width}x${height}, over the 1024x1024 limit`);
 }
 
-main();
+mkdirSync(outDir, { recursive: true });
+copyFileSync(source, target);
+
+const written = statSync(target).size;
+if (written !== data.length) {
+  throw new Error(`copied ${written} bytes, expected ${data.length}`);
+}
+console.log(`wrote ${target} (${width}x${height}, ${written} bytes)`);
