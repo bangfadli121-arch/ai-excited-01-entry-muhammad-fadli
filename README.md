@@ -4,7 +4,7 @@
 
 # ai-excited-01
 
-A program that writes one awe-struck image to /output/entry.png — a bioluminescent whale breaching through a ring of storm clouds at sunset, a tiny red surfer riding the spray at its tail — for make.fun's ai-excited-01 bounty.
+A program that writes one awe-struck image to /output/entry.png — a golden origami dragon coiling through a night sky full of paper cranes, its eye blazing, while a single red paper plane outflies it on a trail of gold — for make.fun's ai-excited-01 bounty.
 
 ## Run
 
