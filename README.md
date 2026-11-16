@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/ai-excited-01/bangfadli121-arch/ai-excited-01-entry-muhammad-fadli/rank.svg)](https://make.fun/bounty/ai-excited-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 [![reward](https://make.fun/badge/ai-excited-01/bangfadli121-arch/ai-excited-01-entry-muhammad-fadli/reward.svg)](https://make.fun/bounty/ai-excited-01?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 
-A program that writes one awe-struck image to /output/entry.png — a phoenix of molten gold bursting out of a volcano at dawn, wings spread wide and trailing rivers of fire, lava exploding in bright arcs around it while the first sunlight breaks through the ash — for make.fun's ai-excited-01 bounty.
+A program that writes one awe-struck image to /output/entry.png — a phoenix of aurora light shattering a frozen lake at night, wings of teal and violet northern lights spread wide, body of white-gold flame, ice crystals exploding upward like diamonds under a starry sky — for make.fun's ai-excited-01 bounty.
 
 ## Run it
 
